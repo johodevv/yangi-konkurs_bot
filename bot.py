@@ -44,10 +44,10 @@ async def cmd_start(message: Message):
     
     welcome_text = (
         "👋 <b>Assalomu alaykum!</b>\n\n"
-        "Konkurs kanallarini jild (folder) ko'rinishida tarqatuvchi botga xush kelibsiz.\n\n"
-        "👇 Quyidagi tugmalardan foydalaning:"
+        "Konkurs jildi (folder) yaratuvchi botga xush kelibsiz.\n"
+        "Kanal qo'shish uchun @username yoki t.me linkini yuboring."
     )
-
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📢 Kanallar", callback_data="list_channels"),
@@ -63,7 +63,7 @@ async def cmd_start(message: Message):
 
     await message.answer(welcome_text, reply_markup=kb)
 
-# ── Kanal qo'shish (To'g'rilangan) ─────────────────────────────────────────────
+# ── Kanal qo'shish (To'g'rilangan variant) ───────────────────────────────────
 
 @router.message(F.text.contains("t.me/") | F.text.startswith("@"))
 async def handle_link(message: Message):
@@ -71,7 +71,7 @@ async def handle_link(message: Message):
         return
 
     text = message.text.strip()
-    # Linkdan username ajratish (t.me/kanal -> kanal)
+    # Linkdan username ajratishni yaxshilaymiz
     username = text.split('/')[-1].replace("@", "").split('?')[0]
     
     msg = await message.answer("🔍 Kanal tekshirilmoqda...")
@@ -83,28 +83,30 @@ async def handle_link(message: Message):
             [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"del_{chat.id}")]
         ])
         await msg.edit_text(
-            f"✅ <b>{chat.title}</b> qo'shildi!\n\n"
-            f"❗️ Bot ushbu kanalda admin bo'lishi shart.",
+            f"✅ <b>{chat.title}</b> bazaga qo'shildi!\n\n"
+            f"❗️ Bot ushbu kanalda admin bo'lishi shart.", 
             reply_markup=kb
         )
     except Exception as e:
         logger.error(f"Kanal xatosi: {e}")
         await msg.edit_text("❌ Kanal topilmadi. Botni kanalga admin qilib, so'ng username yuboring.")
 
-# ── Jild Linkini olish (Asosiy xato shu yerda edi, tuzatildi) ──────────────────
+# ── Jild Linkini olish (Asosiy xato shu yerda edi) ────────────────────────────
 
 @router.callback_query(F.data == "get_link")
 async def send_folder_link(call: CallbackQuery):
-    global userbot
-    # Userbot ulanmagan bo'lsa xato bermasligi uchun tekshiruv
-    if userbot is None:
-        return await call.answer("⚠️ UserBot hali ulanmadi yoki SESSION xato. Biroz kuting...", show_alert=True)
+    # 'userbot' obyekti bot.py ichidagi global o'zgaruvchi ekanini funksiyaga aytamiz
+    import bot as bot_module 
+    ub = bot_module.userbot
+
+    if ub is None:
+        return await call.answer("⚠️ UserBot hali ulanmagan. Bir ozdan so'ng qayta urining.", show_alert=True)
     
     await call.message.edit_text("⏳ Jild linki tayyorlanmoqda, kuting...")
     
     try:
         # userbot.py dagi funksiyani chaqiramiz
-        link = await userbot.create_folder_link()
+        link = await ub.create_folder_link()
         
         if link:
             kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -117,10 +119,10 @@ async def send_folder_link(call: CallbackQuery):
             )
             await call.message.delete()
         else:
-            await call.message.answer("❌ Jild linkini olib bo'lmadi. Bazada kanallar borligini tekshiring.")
+            await call.message.answer("❌ Jild yaratib bo'lmadi. Kanallar bazada borligini tekshiring.")
     except Exception as e:
-        logger.error(f"Jild yaratishda xato: {e}")
-        await call.message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
+        logger.error(f"Folder xatosi: {e}")
+        await call.message.answer(f"❌ Xatolik: {str(e)}")
 
 # ── Kanallar ro'yxati ──────────────────────────────────────────────────────────
 
@@ -128,15 +130,15 @@ async def send_folder_link(call: CallbackQuery):
 async def list_channels(call: CallbackQuery):
     channels = db.get_all_channels()
     if not channels:
-        return await call.answer("📭 Bazada kanallar yo'q.", show_alert=True)
+        return await call.answer("Bazada kanallar yo'q.", show_alert=True)
 
     text = "📋 <b>Bazadagi kanallar:</b>\n\n"
     kb_list = []
     for ch in channels:
-        # DB dan keladigan formatga qarab
-        title = ch.get('channel_title') if isinstance(ch, dict) else ch[3]
-        username = ch.get('channel_username') if isinstance(ch, dict) else ch[2]
-        ch_id = ch.get('channel_id') if isinstance(ch, dict) else ch[1]
+        # SQLite'dan kelayotgan formatni tekshiramiz (dict yoki list)
+        title = ch['channel_title'] if isinstance(ch, dict) else ch[3]
+        username = ch['channel_username'] if isinstance(ch, dict) else ch[2]
+        ch_id = ch['channel_id'] if isinstance(ch, dict) else ch[1]
         
         text += f"🔹 {title} (@{username})\n"
         if call.from_user.id == config.ADMIN_ID:
@@ -151,10 +153,10 @@ async def list_channels(call: CallbackQuery):
 async def delete_channel(call: CallbackQuery):
     ch_id = int(call.data.split("_")[1])
     db.remove_channel(ch_id)
-    await call.answer("✅ O'chirildi.")
+    await call.answer("✅ Kanal o'chirildi.")
     await list_channels(call)
 
-# ── Statistika va Reklama (O'zgarishsiz) ──────────────────────────────────────
+# ── Statistika va Reklama (Asl holicha saqlandi) ───────────────────────────────
 
 @router.callback_query(F.data == "stats")
 async def show_stats(call: CallbackQuery):
