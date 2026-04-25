@@ -28,14 +28,8 @@ dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
 
-# Global userbot referensi (main.py orqali o'rnatiladi)
+# Global userbot referensi (main.py orqali ulanadi)
 userbot = None
-
-# ── Majburiy obuna kanallari ──────────────────────────────────────────────────
-REQUIRED_CHANNELS = [
-    {"username": "ortiqboyovichch", "title": "Ortiqboyovich", "url": "https://t.me/ortiqboyovichch"},
-    {"username": "jildgaqoshil", "title": "Jildga Qo'shil", "url": "https://t.me/jildgaqoshil"},
-]
 
 # ── FSM Holatlari ─────────────────────────────────────────────────────────────
 
@@ -69,7 +63,7 @@ async def cmd_start(message: Message):
 
     await message.answer(welcome_text, reply_markup=kb)
 
-# ── Kanal qo'shish ────────────────────────────────────────────────────────────
+# ── Kanal qo'shish (To'g'rilangan) ─────────────────────────────────────────────
 
 @router.message(F.text.contains("t.me/") | F.text.startswith("@"))
 async def handle_link(message: Message):
@@ -77,7 +71,7 @@ async def handle_link(message: Message):
         return
 
     text = message.text.strip()
-    # Username'ni aniq ajratib olish (t.me/kanal -> kanal)
+    # Linkdan username ajratish (t.me/kanal -> kanal)
     username = text.split('/')[-1].replace("@", "").split('?')[0]
     
     msg = await message.answer("🔍 Kanal tekshirilmoqda...")
@@ -97,19 +91,19 @@ async def handle_link(message: Message):
         logger.error(f"Kanal xatosi: {e}")
         await msg.edit_text("❌ Kanal topilmadi. Botni kanalga admin qilib, so'ng username yuboring.")
 
-# ── Jild Linkini olish (Xatolik tuzatilgan qism) ───────────────────────────────
+# ── Jild Linkini olish (Asosiy xato shu yerda edi, tuzatildi) ──────────────────
 
 @router.callback_query(F.data == "get_link")
 async def send_folder_link(call: CallbackQuery):
-    # Global userbot obyekti None emasligini tekshiramiz
     global userbot
+    # Userbot ulanmagan bo'lsa xato bermasligi uchun tekshiruv
     if userbot is None:
-        return await call.answer("⚠️ UserBot hali ulanmagan. Iltimos, bir ozdan so'ng qayta urining.", show_alert=True)
+        return await call.answer("⚠️ UserBot hali ulanmadi yoki SESSION xato. Biroz kuting...", show_alert=True)
     
     await call.message.edit_text("⏳ Jild linki tayyorlanmoqda, kuting...")
     
     try:
-        # userbot.py dagi create_folder_link funksiyasini chaqiramiz
+        # userbot.py dagi funksiyani chaqiramiz
         link = await userbot.create_folder_link()
         
         if link:
@@ -123,9 +117,9 @@ async def send_folder_link(call: CallbackQuery):
             )
             await call.message.delete()
         else:
-            await call.message.answer("❌ Jild linkini olib bo'lmadi. Kanallar bazada borligini tekshiring.")
+            await call.message.answer("❌ Jild linkini olib bo'lmadi. Bazada kanallar borligini tekshiring.")
     except Exception as e:
-        logger.error(f"Jild yaratishda kutilmagan xato: {e}")
+        logger.error(f"Jild yaratishda xato: {e}")
         await call.message.answer(f"❌ Xatolik yuz berdi: {str(e)}")
 
 # ── Kanallar ro'yxati ──────────────────────────────────────────────────────────
@@ -139,10 +133,14 @@ async def list_channels(call: CallbackQuery):
     text = "📋 <b>Bazadagi kanallar:</b>\n\n"
     kb_list = []
     for ch in channels:
-        # DB dan keladigan ma'lumotlar formatiga qarab (dictionary)
-        text += f"🔹 {ch['channel_title']} (@{ch['channel_username']})\n"
+        # DB dan keladigan formatga qarab
+        title = ch.get('channel_title') if isinstance(ch, dict) else ch[3]
+        username = ch.get('channel_username') if isinstance(ch, dict) else ch[2]
+        ch_id = ch.get('channel_id') if isinstance(ch, dict) else ch[1]
+        
+        text += f"🔹 {title} (@{username})\n"
         if call.from_user.id == config.ADMIN_ID:
-            kb_list.append([InlineKeyboardButton(text=f"🗑 {ch['channel_title']}", callback_data=f"del_{ch['channel_id']}")])
+            kb_list.append([InlineKeyboardButton(text=f"🗑 {title}", callback_data=f"del_{ch_id}")])
 
     kb_list.append([InlineKeyboardButton(text="⬅️ Orqaga", callback_data="back_start")])
     await call.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_list))
@@ -153,10 +151,10 @@ async def list_channels(call: CallbackQuery):
 async def delete_channel(call: CallbackQuery):
     ch_id = int(call.data.split("_")[1])
     db.remove_channel(ch_id)
-    await call.answer("✅ Kanal o'chirildi.")
+    await call.answer("✅ O'chirildi.")
     await list_channels(call)
 
-# ── Statistika va Reklama ─────────────────────────────────────────────────────
+# ── Statistika va Reklama (O'zgarishsiz) ──────────────────────────────────────
 
 @router.callback_query(F.data == "stats")
 async def show_stats(call: CallbackQuery):
