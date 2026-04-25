@@ -31,12 +31,26 @@ dp.include_router(router)
 # Global userbot referensi (main.py tomonidan o'rnatiladi)
 userbot = None
 
+# ── Majburiy obuna kanallari ──────────────────────────────────────────────────
+REQUIRED_CHANNELS = [
+    {
+        "username": "ortiqboyovichch",
+        "title":    "Ortiqboyovich",
+        "url":      "https://t.me/ortiqboyovichch",
+    },
+    {
+        "username": "jildgaqoshil",
+        "title":    "Jildga Qo'shil",
+        "url":      "https://t.me/jildgaqoshil",
+    },
+]
+
 
 # ── FSM Holatlari ─────────────────────────────────────────────────────────────
 
 class AdminStates(StatesGroup):
-    waiting_channel    = State()   # kanal linki kutilmoqda
-    waiting_broadcast  = State()   # reklama xabari kutilmoqda
+    waiting_channel   = State()
+    waiting_broadcast = State()
 
 
 # ── Yordamchi funksiyalar ─────────────────────────────────────────────────────
@@ -46,25 +60,80 @@ def is_admin(user_id: int) -> bool:
 
 
 def make_join_keyboard(folder_link: str) -> InlineKeyboardMarkup:
-    """'Jildga qo'shilish' tugmali inline klaviatura."""
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="📁 Jildga qo'shilish",
-            url=folder_link
-        )
+        InlineKeyboardButton(text="📁 Jildga qo'shilish", url=folder_link)
     ]])
 
 
+def make_subscribe_keyboard() -> InlineKeyboardMarkup:
+    """Majburiy obuna tugmalari + Tekshirish tugmasi."""
+    buttons = []
+    for ch in REQUIRED_CHANNELS:
+        buttons.append([
+            InlineKeyboardButton(text=f"➕ {ch['title']}", url=ch["url"])
+        ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="✅ Obuna bo'ldim, tekshir",
+            callback_data="check_sub"
+        )
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def check_subscription(user_id: int) -> list:
+    """
+    Foydalanuvchi obuna bo'lmagan kanallar ro'yxatini qaytaradi.
+    Bo'sh ro'yxat = hammaga obuna bo'lgan.
+    """
+    not_subscribed = []
+    for ch in REQUIRED_CHANNELS:
+        try:
+            member = await bot.get_chat_member(
+                chat_id=f"@{ch['username']}", user_id=user_id
+            )
+            if member.status in (
+                ChatMemberStatus.LEFT,
+                ChatMemberStatus.BANNED,
+                ChatMemberStatus.KICKED,
+            ):
+                not_subscribed.append(ch)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            logger.warning(f"Obunani tekshirib bo'lmadi: @{ch['username']}")
+        except Exception as e:
+            logger.error(f"Obuna tekshirishda xatolik (@{ch['username']}): {e}")
+    return not_subscribed
+
+
+async def require_subscription(message: Message) -> bool:
+    """
+    Obunani tekshiradi.
+    Obuna bo'lmagan bo'lsa xabar yuboradi va False qaytaradi.
+    Admin uchun tekshiruv o'tkazib yuboriladi.
+    """
+    if is_admin(message.from_user.id):
+        return True
+
+    not_subscribed = await check_subscription(message.from_user.id)
+    if not not_subscribed:
+        return True
+
+    names = " va ".join(f"<b>{ch['title']}</b>" for ch in not_subscribed)
+    await message.answer(
+        f"⚠️ <b>Avval kanalga obuna bo'ling!</b>\n\n"
+        f"Botdan foydalanish uchun {names} kanaliga "
+        f"obuna bo'lishingiz shart.\n\n"
+        f"Obuna bo'lgach, pastdagi tugmani bosing 👇",
+        reply_markup=make_subscribe_keyboard(),
+    )
+    return False
+
+
 async def get_bot_channel_link(channel_id: int) -> str | None:
-    """
-    Kanal uchun invite link oladi.
-    Bot adminda bo'lishi va invite_link huquqi bo'lishi kerak.
-    """
     try:
         chat = await bot.get_chat(channel_id)
         if chat.invite_link:
             return chat.invite_link
-        # Yangi link yaratish
         link = await bot.create_chat_invite_link(channel_id)
         return link.invite_link
     except (TelegramBadRequest, TelegramForbiddenError) as e:
@@ -76,7 +145,6 @@ async def get_bot_channel_link(channel_id: int) -> str | None:
 
 
 async def check_bot_is_admin(channel_id: int) -> bool:
-    """Bot o'sha kanalda admin ekanligini tekshiradi."""
     try:
         member = await bot.get_chat_member(channel_id, (await bot.get_me()).id)
         return member.status in (
@@ -88,6 +156,36 @@ async def check_bot_is_admin(channel_id: int) -> bool:
     except Exception as e:
         logger.error(f"Admin tekshirishda xatolik: {e}")
         return False
+
+
+# ── ✅ Obuna tekshirish callback ──────────────────────────────────────────────
+
+@router.callback_query(F.data == "check_sub")
+async def callback_check_sub(call: CallbackQuery):
+    try:
+        not_subscribed = await check_subscription(call.from_user.id)
+
+        if not_subscribed:
+            unjoined = ", ".join(ch["title"] for ch in not_subscribed)
+            await call.answer(
+                f"❌ Siz hali {unjoined} kanaliga obuna bo'lmagansiz!",
+                show_alert=True,
+            )
+        else:
+            try:
+                await call.message.delete()
+            except Exception:
+                pass
+            channel_count = db.get_channel_count()
+            await call.message.answer(
+                f"✅ <b>Rahmat, obuna tasdiqlandi!</b>\n\n"
+                f"Bu bot <b>{channel_count} ta</b> konkurs kanalini "
+                f"bitta jildda jamlaydi.\n\n"
+                f"Jildga qo'shilish uchun /get_folder buyrug'ini yuboring."
+            )
+    except Exception as e:
+        logger.error(f"callback_check_sub xatolik: {e}")
+        await call.answer("Xatolik yuz berdi, qaytadan urinib ko'ring.", show_alert=True)
 
 
 # ── /start ────────────────────────────────────────────────────────────────────
@@ -111,124 +209,21 @@ async def cmd_start(message: Message):
                 "📢 /broadcast — reklama yuborish\n"
                 "📊 /stats — statistika"
             )
-        else:
-            channel_count = db.get_channel_count()
-            await message.answer(
-                f"👋 <b>Xush kelibsiz!</b>\n\n"
-                f"Bu bot <b>{channel_count} ta</b> konkurs kanalini "
-                f"bitta jildda jamlaydi.\n\n"
-                f"Jildga qo'shilish uchun /get_folder buyrug'ini yuboring."
-            )
-    except Exception as e:
-        logger.error(f"cmd_start xatolik: {e}")
-
-
-# ── /add_channel ──────────────────────────────────────────────────────────────
-
-@router.message(Command("add_channel"))
-async def cmd_add_channel(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    await state.set_state(AdminStates.waiting_channel)
-    await message.answer(
-        "📨 <b>Kanal username yoki ID ni yuboring:</b>\n\n"
-        "Misol: <code>@mening_kanalim</code>\n"
-        "yoki: <code>-1001234567890</code>\n\n"
-        "❌ Bekor qilish: /cancel"
-    )
-
-
-@router.message(AdminStates.waiting_channel)
-async def process_channel_input(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    text = message.text.strip() if message.text else ""
-
-    # /cancel
-    if text.lower() == "/cancel":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi.")
-        return
-
-    try:
-        chat = await bot.get_chat(text)
-    except (TelegramBadRequest, TelegramForbiddenError):
-        await message.answer(
-            "⚠️ <b>Kanal topilmadi!</b>\n\n"
-            "Tekshiring:\n"
-            "• Username to'g'ri ekanligini\n"
-            "• Bot kanalga qo'shilganligini\n\n"
-            "Qaytadan yuboring yoki /cancel"
-        )
-        return
-    except Exception as e:
-        logger.error(f"get_chat xatolik: {e}")
-        await message.answer(f"⚠️ Xatolik: <code>{e}</code>\n\nQaytadan urinib ko'ring.")
-        return
-
-    # Bot admin ekanligini tekshirish
-    is_bot_admin = await check_bot_is_admin(chat.id)
-    if not is_bot_admin:
-        await state.clear()
-        await message.answer(
-            f"❌ <b>Bot kanalda admin emas!</b>\n\n"
-            f"Kanal: <b>{chat.title}</b>\n\n"
-            f"Avval botni kanalga admin qilib qo'ying, keyin qaytadan urinib ko'ring."
-        )
-        return
-
-    # Allaqachon bazada bormi?
-    if db.channel_exists(chat.id):
-        await state.clear()
-        await message.answer(
-            f"⚠️ <b>{chat.title}</b> allaqachon bazada mavjud!"
-        )
-        return
-
-    # Invite link olish
-    invite_link = await get_bot_channel_link(chat.id)
-
-    username = f"@{chat.username}" if chat.username else ""
-    success = db.add_channel(chat.id, username, chat.title, invite_link)
-
-    await state.clear()
-
-    if success:
-        await message.answer(
-            f"✅ <b>Kanal qo'shildi!</b>\n\n"
-            f"📌 Nomi: <b>{chat.title}</b>\n"
-            f"🆔 ID: <code>{chat.id}</code>\n"
-            f"👤 Username: {username or 'yo`q'}\n\n"
-            f"Jami kanallar: <b>{db.get_channel_count()} ta</b>"
-        )
-    else:
-        await message.answer("❌ Bazaga saqlashda xatolik yuz berdi.")
-
-
-# ── /channels ─────────────────────────────────────────────────────────────────
-
-@router.message(Command("channels"))
-async def cmd_channels(message: Message):
-    if not is_admin(message.from_user.id):
-        return
-
-    try:
-        channels = db.get_channels()
-        if not channels:
-            await message.answer("📋 Bazada hozircha kanallar yo'q.")
             return
 
-        lines = [f"📋 <b>Kanallar ro'yxati ({len(channels)} ta):</b>\n"]
-        for i, (ch_id, ch_username, ch_title, _) in enumerate(channels, 1):
-            username_str = ch_username if ch_username else "username yo`q"
-            lines.append(f"{i}. <b>{ch_title}</b> ({username_str})\n   ID: <code>{ch_id}</code>")
+        # Obuna tekshirish
+        if not await require_subscription(message):
+            return
 
-        await message.answer("\n".join(lines))
+        channel_count = db.get_channel_count()
+        await message.answer(
+            f"👋 <b>Xush kelibsiz!</b>\n\n"
+            f"Bu bot <b>{channel_count} ta</b> konkurs kanalini "
+            f"bitta jildda jamlaydi.\n\n"
+            f"Jildga qo'shilish uchun /get_folder buyrug'ini yuboring."
+        )
     except Exception as e:
-        logger.error(f"cmd_channels xatolik: {e}")
-        await message.answer("⚠️ Xatolik yuz berdi.")
+        logger.error(f"cmd_start xatolik: {e}")
 
 
 # ── /get_folder ───────────────────────────────────────────────────────────────
@@ -236,6 +231,9 @@ async def cmd_channels(message: Message):
 @router.message(Command("get_folder"))
 async def cmd_get_folder(message: Message):
     try:
+        if not await require_subscription(message):
+            return
+
         if db.get_channel_count() == 0:
             await message.answer("⚠️ Bazada hozircha kanallar yo'q.")
             return
@@ -259,15 +257,105 @@ async def cmd_get_folder(message: Message):
                 f"🔗 {folder_link}\n\n"
                 f"Bu link orqali barcha konkurs kanallarini\n"
                 f"bir jildda qabul qilasiz!",
-                reply_markup=make_join_keyboard(folder_link)
+                reply_markup=make_join_keyboard(folder_link),
             )
         else:
-            await message.answer(
-                "❌ <b>Jild linki yaratishda xatolik.</b>\n\n"
-                "Loglarni tekshiring."
-            )
+            await message.answer("❌ <b>Jild linki yaratishda xatolik.</b>")
     except Exception as e:
         logger.error(f"cmd_get_folder xatolik: {e}")
+        await message.answer("⚠️ Xatolik yuz berdi.")
+
+
+# ── /add_channel ──────────────────────────────────────────────────────────────
+
+@router.message(Command("add_channel"))
+async def cmd_add_channel(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminStates.waiting_channel)
+    await message.answer(
+        "📨 <b>Kanal username yoki ID ni yuboring:</b>\n\n"
+        "Misol: <code>@mening_kanalim</code>\n"
+        "yoki: <code>-1001234567890</code>\n\n"
+        "❌ Bekor qilish: /cancel"
+    )
+
+
+@router.message(AdminStates.waiting_channel)
+async def process_channel_input(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    text = message.text.strip() if message.text else ""
+    if text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Bekor qilindi.")
+        return
+
+    try:
+        chat = await bot.get_chat(text)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        await message.answer(
+            "⚠️ <b>Kanal topilmadi!</b>\n\n"
+            "• Username to'g'ri ekanligini tekshiring\n"
+            "• Bot kanalga qo'shilganligini tekshiring\n\n"
+            "Qaytadan yuboring yoki /cancel"
+        )
+        return
+    except Exception as e:
+        logger.error(f"get_chat xatolik: {e}")
+        await message.answer(f"⚠️ Xatolik: <code>{e}</code>")
+        return
+
+    if not await check_bot_is_admin(chat.id):
+        await state.clear()
+        await message.answer(
+            f"❌ <b>Bot kanalda admin emas!</b>\n\n"
+            f"Kanal: <b>{chat.title}</b>\n\n"
+            f"Avval botni kanalga admin qilib qo'ying."
+        )
+        return
+
+    if db.channel_exists(chat.id):
+        await state.clear()
+        await message.answer(f"⚠️ <b>{chat.title}</b> allaqachon bazada mavjud!")
+        return
+
+    invite_link = await get_bot_channel_link(chat.id)
+    username = f"@{chat.username}" if chat.username else ""
+    success = db.add_channel(chat.id, username, chat.title, invite_link)
+    await state.clear()
+
+    if success:
+        await message.answer(
+            f"✅ <b>Kanal qo'shildi!</b>\n\n"
+            f"📌 Nomi: <b>{chat.title}</b>\n"
+            f"🆔 ID: <code>{chat.id}</code>\n"
+            f"👤 Username: {username or 'yo`q'}\n\n"
+            f"Jami kanallar: <b>{db.get_channel_count()} ta</b>"
+        )
+    else:
+        await message.answer("❌ Bazaga saqlashda xatolik yuz berdi.")
+
+
+# ── /channels ─────────────────────────────────────────────────────────────────
+
+@router.message(Command("channels"))
+async def cmd_channels(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        channels = db.get_channels()
+        if not channels:
+            await message.answer("📋 Bazada hozircha kanallar yo'q.")
+            return
+        lines = [f"📋 <b>Kanallar ro'yxati ({len(channels)} ta):</b>\n"]
+        for i, (ch_id, ch_username, ch_title, _) in enumerate(channels, 1):
+            uname = ch_username if ch_username else "username yo`q"
+            lines.append(f"{i}. <b>{ch_title}</b> ({uname})\n   ID: <code>{ch_id}</code>")
+        await message.answer("\n".join(lines))
+    except Exception as e:
+        logger.error(f"cmd_channels xatolik: {e}")
         await message.answer("⚠️ Xatolik yuz berdi.")
 
 
@@ -277,7 +365,6 @@ async def cmd_get_folder(message: Message):
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     try:
         await message.answer(
             f"📊 <b>Statistika:</b>\n\n"
@@ -294,11 +381,9 @@ async def cmd_stats(message: Message):
 async def cmd_broadcast(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-
     if db.get_channel_count() == 0:
         await message.answer("⚠️ Bazada kanallar yo'q. Avval kanal qo'shing.")
         return
-
     await state.set_state(AdminStates.waiting_broadcast)
     await message.answer(
         "📢 <b>Reklama xabarini yuboring:</b>\n\n"
@@ -312,7 +397,6 @@ async def cmd_broadcast(message: Message, state: FSMContext):
 async def process_broadcast(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-
     if message.text and message.text.strip().lower() == "/cancel":
         await state.clear()
         await message.answer("❌ Bekor qilindi.")
@@ -320,7 +404,6 @@ async def process_broadcast(message: Message, state: FSMContext):
 
     await state.clear()
 
-    # Folder link olish
     folder_link = None
     if userbot and userbot.is_ready:
         wait_msg = await message.answer("⏳ Jild linki olinmoqda…")
@@ -331,14 +414,10 @@ async def process_broadcast(message: Message, state: FSMContext):
             pass
 
     keyboard = make_join_keyboard(folder_link) if folder_link else None
-
     channels = db.get_channels()
     success_count = 0
     fail_count = 0
-
-    progress_msg = await message.answer(
-        f"📤 Yuborilmoqda: 0/{len(channels)}"
-    )
+    progress_msg = await message.answer(f"📤 Yuborilmoqda: 0/{len(channels)}")
 
     for i, (ch_id, _, ch_title, _) in enumerate(channels, 1):
         try:
@@ -357,16 +436,12 @@ async def process_broadcast(message: Message, state: FSMContext):
             logger.error(f"Kutilmagan xatolik ({ch_title}): {e}")
             fail_count += 1
 
-        # Har 5 ta kanaldan keyin progress yangilash
         if i % 5 == 0:
             try:
-                await progress_msg.edit_text(
-                    f"📤 Yuborilmoqda: {i}/{len(channels)}"
-                )
+                await progress_msg.edit_text(f"📤 Yuborilmoqda: {i}/{len(channels)}")
             except Exception:
                 pass
-
-        await asyncio.sleep(0.1)  # flood limitdan saqlanish
+        await asyncio.sleep(0.1)
 
     try:
         await progress_msg.delete()
@@ -380,7 +455,7 @@ async def process_broadcast(message: Message, state: FSMContext):
     )
 
 
-# ── /cancel (global) ──────────────────────────────────────────────────────────
+# ── /cancel ───────────────────────────────────────────────────────────────────
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext):
@@ -398,8 +473,7 @@ async def cmd_cancel(message: Message, state: FSMContext):
 async def handle_unknown(message: Message, state: FSMContext):
     current = await state.get_state()
     if current:
-        return  # FSM holati bor — tegishli handler ishlasin
-
+        return
     if is_admin(message.from_user.id):
         await message.answer(
             "❓ Buyruqni tanlamadingiz.\n\n"
