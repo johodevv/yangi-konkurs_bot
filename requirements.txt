@@ -1,6 +1,6 @@
-aiogram==3.4.1
+aiogram==3.13.1
 pyrogram==2.0.106
-tgcrypto
-aiohttp
-pydantic
-pydantic-settings
+TgCrypto==1.2.5
+aiohttp==3.10.10
+pydantic==2.7.4
+pydantic-core==2.18.4
