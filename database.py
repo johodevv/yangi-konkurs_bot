@@ -9,7 +9,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Kanallar (kanal egalari qo'shgan)
     c.execute("""
         CREATE TABLE IF NOT EXISTS channels (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +21,6 @@ def init_db():
         )
     """)
 
-    # Foydalanuvchilar
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,6 +28,17 @@ def init_db():
             username  TEXT,
             fullname  TEXT,
             joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Rejalashtirilgan konkurslar
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_contests (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_text TEXT,
+            run_at       TEXT NOT NULL,
+            status       TEXT DEFAULT 'pending',
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -120,5 +129,58 @@ def get_all_user_ids() -> list:
     conn = sqlite3.connect(DB_PATH)
     try:
         return [r[0] for r in conn.execute("SELECT user_id FROM users").fetchall()]
+    finally:
+        conn.close()
+
+
+# ── Scheduled contests ────────────────────────────────────────────────────────
+
+def add_contest(message_text: str, run_at: str) -> int:
+    """Rejalashtirilgan konkurs qo'shadi. ID qaytaradi."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute("""
+            INSERT INTO scheduled_contests (message_text, run_at, status)
+            VALUES (?, ?, 'pending')
+        """, (message_text, run_at))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def get_pending_contests() -> list:
+    """Kutilayotgan konkurslar: (id, message_text, run_at)"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return conn.execute("""
+            SELECT id, message_text, run_at FROM scheduled_contests
+            WHERE status = 'pending'
+            ORDER BY run_at
+        """).fetchall()
+    finally:
+        conn.close()
+
+
+def mark_contest_done(contest_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE scheduled_contests SET status='done' WHERE id=?",
+            (contest_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def cancel_contest(contest_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE scheduled_contests SET status='cancelled' WHERE id=?",
+            (contest_id,)
+        )
+        conn.commit()
     finally:
         conn.close()
